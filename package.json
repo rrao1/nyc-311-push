@@ -1,0 +1,14 @@
+{
+  "name": "nyc-311-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NYC 311 neighborhood complaints dashboard with a Claude-powered Q&A, deployable to Vercel.",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1"
+  }
+}

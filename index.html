@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NYC 311 · What's your neighborhood complaining about?</title>
+  <meta name="description" content="Type a NYC ZIP code to see the top 311 complaints in that area over the last year, powered by NYC Open Data." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">NYC Open Data · 311 Service Requests</p>
+        <h1>What is your neighborhood complaining about?</h1>
+        <p class="subtitle">
+          Enter a New York City ZIP code to see the top 311 complaint types reported
+          in that area over the last 12 months.
+        </p>
+      </div>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark mode">◐</button>
+    </header>
+
+    <main>
+      <form id="zip-form" class="zip-form" autocomplete="off">
+        <label for="zip-input" class="sr-only">NYC ZIP code</label>
+        <input
+          id="zip-input"
+          class="zip-input"
+          type="text"
+          inputmode="numeric"
+          pattern="\d{5}"
+          maxlength="5"
+          placeholder="e.g. 11106"
+          aria-describedby="zip-hint"
+        />
+        <button type="submit" class="btn-primary">Show complaints</button>
+      </form>
+      <p id="zip-hint" class="hint">Try 10001 (Chelsea), 11211 (Williamsburg), 10453 (Bronx), or 11106 (Astoria).</p>
+
+      <section id="results" class="results" hidden>
+        <div class="stat-row" id="stat-row"></div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h2 id="chart-title">Top complaints</h2>
+            <span id="chart-caption" class="chart-caption"></span>
+          </div>
+          <div id="chart" class="chart" role="img" aria-label="Bar chart of top 311 complaint types"></div>
+        </div>
+
+        <div class="ai-card">
+          <div class="ai-header">
+            <h2>Ask about this data</h2>
+            <span class="badge">Claude</span>
+          </div>
+          <p class="ai-sub">
+            Ask a question in plain English — e.g. “What stands out here?” or
+            “Is this a lot of noise complaints?” Answers are grounded in the numbers above.
+          </p>
+          <form id="ai-form" class="ai-form">
+            <input id="ai-input" class="ai-input" type="text" placeholder="Ask a question about these complaints…" />
+            <button type="submit" class="btn-primary" id="ai-send">Ask</button>
+          </form>
+          <div id="ai-answer" class="ai-answer" hidden></div>
+        </div>
+      </section>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Data: <a href="https://data.cityofnewyork.us/Social-Services/311-Service-Requests-from-2010-to-Present/erm2-nwe9" target="_blank" rel="noopener">NYC 311 Service Requests</a>,
+        via the Socrata Open Data API. Last 12 months, grouped by complaint type.
+      </p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
