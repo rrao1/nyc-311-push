@@ -93,9 +93,9 @@ function renderStats(complaints, total) {
   const top = complaints[0];
   const topShare = top && total ? Math.round((top.count / total) * 100) : 0;
   const tiles = [
-    { value: fmt(total), label: "Total complaints (last 12 mo)" },
-    { value: complaints.length ? `${topShare}%` : "—", label: top ? `are “${top.type}”` : "top share" },
-    { value: fmt(complaints.length), label: "Distinct complaint types shown" },
+    { value: fmt(total), label: "Total · last 12 mo" },
+    { value: complaints.length ? `${topShare}%` : "—", label: "Top complaint share" },
+    { value: fmt(complaints.length), label: "Complaint types" },
   ];
   statRow.innerHTML = tiles
     .map(
