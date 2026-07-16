@@ -16,6 +16,7 @@ const chartEl = document.getElementById("chart");
 const chartTitle = document.getElementById("chart-title");
 const chartCaption = document.getElementById("chart-caption");
 const statusEl = document.getElementById("status");
+const mapCaption = document.getElementById("map-caption");
 const aiForm = document.getElementById("ai-form");
 const aiInput = document.getElementById("ai-input");
 const aiAnswer = document.getElementById("ai-answer");
@@ -93,7 +94,7 @@ function renderChart(complaints) {
   const max = complaints[0].count;
   chartEl.innerHTML = complaints
     .map(
-      (c) => `<div class="bar-row">
+      (c) => `<div class="bar-row filterable" data-type="${c.type}">
         <div class="bar-label"><span class="name">${c.type}</span><span class="count">${fmt(c.count)}</span></div>
         <div class="bar-track"><div class="bar-fill" data-w="${(c.count / max) * 100}"></div></div>
       </div>`
@@ -159,14 +160,129 @@ function render(zip, complaints, total) {
   results.hidden = false;
 }
 
+// --- Map (Leaflet) ---
+const NYC_CENTER = [40.7128, -73.9855];
+const SERIES1 = "#2a78d6";
+let map = null;
+let markerLayer = null;
+let allPoints = [];
+let activeType = null;
+
+function ensureMap() {
+  if (map) return;
+  map = L.map("map", { preferCanvas: true }).setView(NYC_CENTER, 11);
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    attribution: "&copy; OpenStreetMap &copy; CARTO",
+    subdomains: "abcd",
+    maxZoom: 19,
+  }).addTo(map);
+  markerLayer = L.layerGroup().addTo(map);
+}
+
+function popupHtml(p) {
+  const date = p.date ? new Date(p.date).toLocaleDateString("en-US") : "—";
+  return `<div class="map-popup">
+    <b>${p.type}</b><br>
+    ${p.descriptor ? p.descriptor + "<br>" : ""}
+    ${p.address ? p.address + "<br>" : ""}
+    <span class="muted">${date} · ${p.status || "status unknown"}</span>
+  </div>`;
+}
+
+function renderMarkers(points) {
+  markerLayer.clearLayers();
+  points.forEach((p) => {
+    const m = L.circleMarker([p.lat, p.lng], {
+      radius: 5,
+      weight: 1,
+      color: "#ffffff",
+      fillColor: SERIES1,
+      fillOpacity: 0.82,
+    });
+    m.bindPopup(popupHtml(p));
+    markerLayer.addLayer(m);
+  });
+}
+
+async function fetchComplaintPoints(zip) {
+  const since = sinceDateISO();
+  const where = `incident_zip='${zip}' AND created_date >= '${since}' AND latitude IS NOT NULL`;
+  const params = new URLSearchParams({
+    "$select": "latitude, longitude, complaint_type, descriptor, created_date, status, incident_address",
+    "$where": where,
+    "$order": "created_date DESC",
+    "$limit": "800",
+  });
+  const res = await fetch(`${SODA_ENDPOINT}?${params.toString()}`);
+  if (!res.ok) throw new Error(`points ${res.status}`);
+  const rows = await res.json();
+  return rows
+    .map((r) => ({
+      lat: Number(r.latitude),
+      lng: Number(r.longitude),
+      type: titleCase(r.complaint_type || "Unknown"),
+      descriptor: r.descriptor || "",
+      date: r.created_date || "",
+      status: r.status || "",
+      address: r.incident_address || "",
+    }))
+    .filter((p) => p.lat && p.lng);
+}
+
+function applyMapFilter() {
+  const pts = activeType ? allPoints.filter((p) => p.type === activeType) : allPoints;
+  renderMarkers(pts);
+  chartEl.querySelectorAll(".bar-row").forEach((r) => {
+    r.classList.toggle("active", r.dataset.type === activeType);
+  });
+  if (pts.length) {
+    map.flyToBounds(L.latLngBounds(pts.map((p) => [p.lat, p.lng])), {
+      padding: [30, 30], maxZoom: 16, duration: 0.8,
+    });
+  }
+  mapCaption.textContent = activeType
+    ? `Showing “${activeType}” — click the bar again to reset`
+    : `${allPoints.length} recent located complaints · click a bar to filter`;
+}
+
+async function loadPoints(zip) {
+  ensureMap();
+  map.setView(NYC_CENTER, 11); // start city-wide, then fly in
+  map.invalidateSize();
+  markerLayer.clearLayers();
+  mapCaption.textContent = "Loading map…";
+  try {
+    allPoints = await fetchComplaintPoints(zip);
+    renderMarkers(allPoints);
+    if (allPoints.length) {
+      map.flyToBounds(L.latLngBounds(allPoints.map((p) => [p.lat, p.lng])), {
+        padding: [30, 30], maxZoom: 15, duration: 1.4,
+      });
+    }
+    mapCaption.textContent = `${allPoints.length} recent located complaints · click a point for details, or a bar to filter`;
+  } catch (err) {
+    mapCaption.textContent = "Couldn't load map points.";
+  }
+}
+
+// Click a chart bar to filter the map to that complaint type.
+chartEl.addEventListener("click", (e) => {
+  const row = e.target.closest(".bar-row");
+  if (!row || !row.dataset.type || !map) return;
+  activeType = activeType === row.dataset.type ? null : row.dataset.type;
+  applyMapFilter();
+});
+
 // --- Main flow ---
 async function loadZip(zip) {
   aiAnswer.hidden = true;
+  activeType = null;
 
   // Instant path: this ZIP was already loaded this session.
   const cached = readCache(zip);
   if (cached) {
     render(zip, cached.complaints, cached.total);
+    loadPoints(zip);
     setStatus("");
     return;
   }
@@ -182,6 +298,7 @@ async function loadZip(zip) {
     const total = complaints.reduce((s, c) => s + c.count, 0);
     writeCache(zip, { complaints, total });
     render(zip, complaints, total);
+    loadPoints(zip);
     setStatus("");
   } catch (err) {
     results.hidden = true;

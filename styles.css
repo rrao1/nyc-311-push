@@ -199,8 +199,17 @@ h1 {
 .chart-header h2, .ai-header h2 { margin: 0; font-size: 17px; }
 .chart-caption { font-size: 13px; color: var(--text-muted); }
 
+.map { height: 400px; border-radius: 10px; overflow: hidden; z-index: 0; }
+.map-popup { font-size: 13px; line-height: 1.5; }
+.map-popup b { color: var(--series-1); }
+.map-popup .muted { color: var(--text-muted); }
+
 .chart { display: flex; flex-direction: column; gap: 10px; }
 .bar-row { display: grid; grid-template-columns: 1fr; gap: 4px; }
+.bar-row.filterable { cursor: pointer; }
+.bar-row.filterable:hover .bar-fill { background: var(--accent-ink); }
+.bar-row.active .bar-fill { background: var(--accent-ink); }
+.bar-row.active .name { font-weight: 600; }
 .bar-label {
   display: flex;
   justify-content: space-between;
