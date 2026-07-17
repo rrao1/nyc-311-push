@@ -232,12 +232,22 @@ function ensureMap() {
   markerLayer = L.markerClusterGroup({
     chunkedLoading: true,
     showCoverageOnHover: false,
-    maxClusterRadius: 50,
+    maxClusterRadius: 40,
+    disableClusteringAtZoom: 16,
+    spiderfyOnMaxZoom: true,
     iconCreateFunction: (cluster) => {
+      // Color the cluster by its most common complaint category.
+      const counts = {};
+      cluster.getAllChildMarkers().forEach((m) => {
+        const k = m.options.catKey || "other";
+        counts[k] = (counts[k] || 0) + 1;
+      });
+      const domKey = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+      const color = (CATEGORIES.find((c) => c.key === domKey) || {}).color || "#898781";
       const n = cluster.getChildCount();
-      const size = n < 10 ? 34 : n < 100 ? 42 : 52;
+      const size = n < 10 ? 32 : n < 50 ? 40 : n < 200 ? 48 : 56;
       return L.divIcon({
-        html: `<div class="cx-cluster" style="width:${size}px;height:${size}px">${n}</div>`,
+        html: `<div class="cx-cluster" style="width:${size}px;height:${size}px;background:${color}">${n}</div>`,
         className: "",
         iconSize: [size, size],
       });
@@ -271,9 +281,10 @@ function popupHtml(p) {
 
 function renderMarkers(points) {
   markerLayer.clearLayers();
-  const markers = points.map((p) =>
-    L.marker([p.lat, p.lng], { icon: dotIcon(categorize(p.type).color) }).bindPopup(popupHtml(p))
-  );
+  const markers = points.map((p) => {
+    const cat = categorize(p.type);
+    return L.marker([p.lat, p.lng], { icon: dotIcon(cat.color), catKey: cat.key }).bindPopup(popupHtml(p));
+  });
   markerLayer.addLayers(markers);
 }
 
