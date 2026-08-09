@@ -16,6 +16,10 @@
   --shadow:         0 1px 2px rgba(11,11,11,0.04), 0 8px 24px rgba(11,11,11,0.06);
   --font-sans:      "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-display:   "Bricolage Grotesque", "Inter", system-ui, sans-serif;
+  /* Report-card status colors (theme-aware) */
+  --ok:        #1a8a5a; --ok-soft:   #dcf3e8;
+  --warn:      #b06d06; --warn-soft: #fbedcf;
+  --bad:       #c8352f; --bad-soft:  #fadedc;
 }
 :root[data-theme="dark"],
 :root:where(:not([data-theme="light"])) {
@@ -36,6 +40,9 @@
     --series-1-soft:  #163a5f;
     --accent-ink:     #9ec5f4;
     --shadow:         0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.5);
+    --ok:        #4cc38a; --ok-soft:   #123122;
+    --warn:      #e0a34a; --warn-soft: #372a10;
+    --bad:       #ef6b64; --bad-soft:  #3a1614;
   }
 }
 :root[data-theme="dark"] {
@@ -52,6 +59,9 @@
   --series-1-soft:  #163a5f;
   --accent-ink:     #9ec5f4;
   --shadow:         0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.5);
+  --ok:        #4cc38a; --ok-soft:   #123122;
+  --warn:      #e0a34a; --warn-soft: #372a10;
+  --bad:       #ef6b64; --bad-soft:  #3a1614;
 }
 
 * { box-sizing: border-box; }
@@ -435,4 +445,732 @@ h1 {
   position: absolute; width: 1px; height: 1px;
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+
+/* ---- Cross-page nav + example chips (building page) ---- */
+.page-nav {
+  margin-top: 14px;
+}
+.page-nav a {
+  display: inline-block;
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent-ink);
+  text-decoration: none;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.page-nav a:hover {
+  border-color: var(--series-1);
+  transform: translateY(-1px);
+}
+.addr-input {
+  letter-spacing: normal;
+  font-variant-numeric: normal;
+  min-width: min(340px, 70vw);
+}
+.example-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 2px;
+}
+.chip {
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.chip:hover {
+  border-color: var(--series-1);
+  color: var(--accent-ink);
+}
+
+/* ---- Loading spinner (building report card) ---- */
+.spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--border);
+  border-top-color: var(--series-1);
+  border-radius: 50%;
+  margin-right: 9px;
+  vertical-align: -2px;
+  animation: spin 0.7s linear infinite;
+}
+.loading-text {
+  color: var(--text-secondary);
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 1.6s; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   BUILDING PAGE — two-column layout (form + report | map)
+   ═══════════════════════════════════════════════════════════════════════ */
+.building-page { max-width: 860px; }
+.building-main { display: block; }
+
+/* Demoted "location strip": a small supporting map + label, below the report. */
+.location-strip { margin-top: 22px; }
+.building-map {
+  height: 150px;
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 0;
+}
+.location-strip .loc-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 9px;
+}
+.location-strip .loc-addr {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.location-strip .loc-maps-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--series-1);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.location-strip .loc-maps-link:hover { color: var(--accent-ink); text-decoration: underline; }
+@media (max-width: 560px) {
+  .location-strip .loc-meta { flex-direction: column; align-items: flex-start; gap: 4px; }
+}
+
+/* ---- Address autocomplete dropdown ---- */
+.addr-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.building-page .addr-input {
+  width: 100%;
+  min-width: 0;
+}
+.addr-suggestions {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 6px;
+  position: absolute;
+  z-index: 1000;
+  left: 0;
+  right: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.addr-suggestions li {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14.5px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.addr-suggestions li .sug-sub {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.addr-suggestions li:hover,
+.addr-suggestions li.active {
+  background: var(--series-1-soft);
+  color: var(--accent-ink);
+}
+
+/* ---- Report cards (one per dataset finding) ---- */
+.report-cards {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 4px;
+}
+.report-card-item {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--rc-color, var(--baseline));
+  border-radius: 12px;
+  background: var(--page-plane);
+  overflow: hidden;
+  transition: box-shadow 0.15s ease;
+}
+.report-card-item.open { box-shadow: var(--shadow); }
+/* The whole header is a button that toggles the records panel. */
+.report-card-item .rc-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.report-card-item .rc-head:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: -2px;
+  border-radius: 10px;
+}
+.report-card-item .rc-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--rc-soft, var(--gridline));
+  color: var(--rc-color, var(--text-secondary));
+}
+.report-card-item .rc-icon svg { width: 20px; height: 20px; display: block; }
+.report-card-item .rc-body { display: block; min-width: 0; flex: 1; }
+.report-card-item .rc-title {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.report-card-item .rc-stat {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.report-card-item .rc-note {
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.report-card-item .rc-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--rc-color, var(--baseline));
+  flex-shrink: 0;
+}
+.report-card-item[data-status="green"] { --rc-color: var(--ok);   --rc-soft: var(--ok-soft); }
+.report-card-item[data-status="amber"] { --rc-color: var(--warn); --rc-soft: var(--warn-soft); }
+.report-card-item[data-status="red"]   { --rc-color: var(--bad);  --rc-soft: var(--bad-soft); }
+
+/* "View records" affordance + chevron */
+.report-card-item .rc-view {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.report-card-item .rc-chevron {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.2s ease;
+}
+.report-card-item.open .rc-chevron { transform: rotate(180deg); }
+.report-card-item .rc-head:hover .rc-view { color: var(--rc-color, var(--text-secondary)); }
+
+/* Collapsible records panel */
+.rc-panel {
+  padding: 4px 16px 16px 16px;
+  border-top: 1px dashed var(--border);
+  margin-top: -1px;
+}
+.report-card-item.open .rc-panel { animation: rc-open 0.24s ease both; }
+@keyframes rc-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Prominent "most recent open" flag (violations) */
+.rc-open-flag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: var(--bad-soft);
+  color: var(--bad);
+  font-size: 13px;
+  font-weight: 600;
+}
+.rc-open-flag strong { font-weight: 800; }
+.rc-open-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bad); flex-shrink: 0;
+}
+
+.rc-empty {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Individual record rows */
+.rec-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rec {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 12px;
+  row-gap: 3px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+}
+.rec-date {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.rec-tags { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.rec-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  text-transform: capitalize;
+}
+.rec-tag.open { background: var(--bad-soft); color: var(--bad); }
+.rec-tag.closed { background: var(--ok-soft); color: var(--ok); }
+.rec-class {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gridline);
+  color: var(--text-secondary);
+}
+.rec-class-c { background: var(--bad-soft); color: var(--bad); }
+.rec-desc {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ---- Lazy drill-down (fetched from /api/detail on first expand) ---- */
+.rc-detail { margin-top: 10px; }
+.rc-detail-loading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 2px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}
+/* Plain-language TL;DR from the model, grounded in the records */
+.rc-tldr {
+  margin: 2px 0 12px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: var(--series-1-soft);
+  color: var(--accent-ink);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+/* "⚠️ Needs attention" — the flagged/status-driving records, at any age */
+.rc-flagged {
+  margin-bottom: 14px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--bad);
+  border-radius: 11px;
+  background: var(--bad-soft);
+}
+.rc-flagged-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--bad);
+}
+.rc-flagged .rec-list { margin-top: 6px; }
+.rc-section-head {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 2px 0;
+}
+/* ---- Source / verification links ("check the receipts") ---- */
+.rc-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.rc-src-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.rc-src {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--series-1);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.rc-src:hover { color: var(--accent-ink); text-decoration: underline; }
+/* Make verification loud when the category is flagged (red). */
+.rc-sources.flagged {
+  border-top-color: var(--bad);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--bad-soft);
+}
+.rc-sources.flagged .rc-src-label { color: var(--bad); }
+.rc-sources.flagged .rc-src { color: var(--bad); }
+.rc-sources.flagged .rc-src:hover { text-decoration: underline; }
+
+/* ---- Building map marker pin ---- */
+.bld-pin {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50% 50% 50% 0;
+  background: var(--series-1);
+  border: 3px solid #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-sizing: border-box;
+  transform: rotate(-45deg);
+}
+
+/* ---- Overall letter-grade banner ---- */
+.grade-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--gb-soft, var(--gridline));
+  margin-bottom: 4px;
+}
+.grade-banner .grade-letter {
+  flex-shrink: 0;
+  width: 58px;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--surface-1);
+  color: var(--gb-color, var(--text-primary));
+  border: 2px solid var(--gb-color, var(--baseline));
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.grade-banner .grade-headline {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.grade-banner .grade-sub {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.grade-banner[data-status="green"] { --gb-color: var(--ok);   --gb-soft: var(--ok-soft); }
+.grade-banner[data-status="amber"] { --gb-color: var(--warn); --gb-soft: var(--warn-soft); }
+.grade-banner[data-status="red"]   { --gb-color: var(--bad);  --gb-soft: var(--bad-soft); }
+
+/* ---- Dynamic loading checklist ---- */
+.load-steps {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.load-step {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 14.5px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  transition: color 0.3s ease, opacity 0.3s ease;
+}
+.load-step.active { color: var(--text-primary); opacity: 1; }
+.load-step.done   { color: var(--text-secondary); opacity: 1; }
+.ls-mark {
+  flex-shrink: 0;
+  width: 19px;
+  height: 19px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  position: relative;
+}
+.load-step.active .ls-mark {
+  border-top-color: var(--series-1);
+  animation: spin 0.7s linear infinite;
+}
+.load-step.done .ls-mark {
+  border-color: var(--ok);
+  background: var(--ok);
+  animation: pop 0.3s ease;
+}
+.load-step.done .ls-mark::after {
+  content: "\2713"; /* ✓ */
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+@keyframes pop {
+  0%   { transform: scale(0.6); }
+  60%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+/* ---- "Writing your report" phase — lively, honest indeterminate state ---- */
+.load-writing {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  animation: rc-open 0.3s ease both;
+}
+.lw-head { display: flex; align-items: center; gap: 10px; }
+.lw-spark {
+  width: 18px; height: 18px; flex-shrink: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, var(--series-1) 0 30%, transparent 60%);
+  box-shadow: 0 0 0 0 var(--series-1-soft);
+  animation: lw-pulse 1.4s ease-in-out infinite;
+}
+@keyframes lw-pulse {
+  0%, 100% { transform: scale(0.82); box-shadow: 0 0 0 0 var(--series-1-soft); opacity: 0.75; }
+  50%      { transform: scale(1); box-shadow: 0 0 0 6px transparent; opacity: 1; }
+}
+.lw-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.lw-caption {
+  margin: 6px 0 10px 28px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  min-height: 19px;
+  transition: opacity 0.2s ease;
+}
+.lw-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--gridline);
+  overflow: hidden;
+}
+.lw-bar-fill {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--series-1-soft), var(--series-1), var(--series-1-soft));
+  animation: lw-slide 1.3s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+@keyframes lw-slide {
+  0%   { left: -45%; }
+  100% { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lw-spark { animation: none; }
+  .lw-bar-fill {
+    width: 100%;
+    left: 0;
+    animation: none;
+    opacity: 0.6;
+  }
+  .load-writing, .report-card-item.open .rc-panel, .report-card-item.open .rc-chevron { animation: none; }
+  .report-card-item .rc-chevron { transition: none; }
+}
+
+/* ---- Footer theme toggle ---- */
+.footer-toggle {
+  margin-top: 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.footer-toggle:hover { border-color: var(--series-1); color: var(--accent-ink); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DESIGN PASS — whitespace + hairlines over boxes (#2); color = signal only (#3)
+   (Building tab only. Overrides earlier rules via later-in-cascade + specificity.)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Let the report breathe — drop the heavy container card. */
+.building-page #report-card {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+  padding: 0;
+  margin-top: 4px;
+}
+.building-page #report-card:hover { box-shadow: none; }
+
+/* Report cards become a clean hairline-divided list, not separate boxes. */
+.report-cards { gap: 0; margin: 20px 0 4px; }
+.report-card-item {
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+.grade-banner + .report-card-item { border-top: none; }
+.report-card-item.open { box-shadow: none; background: transparent; }
+.report-card-item .rc-head { padding: 18px 2px; gap: 15px; }
+.report-card-item.open .rc-head { padding-bottom: 8px; }
+
+/* Icons recede to neutral outlines; the colored status dot carries the meaning. */
+.report-card-item .rc-icon {
+  width: 30px; height: 30px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.report-card-item .rc-icon svg { width: 17px; height: 17px; }
+
+/* Panel: align to the list rhythm, no boxed feel. */
+.rc-panel { padding: 2px 2px 18px 2px; border-top: none; }
+
+/* TL;DR: a quiet left-rule accent instead of a blue color block. */
+.rc-tldr {
+  background: transparent;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border);
+  border-radius: 0;
+  padding: 1px 0 1px 14px;
+  margin: 2px 0 16px;
+}
+
+/* Grade banner: neutral canvas separated by a hairline; the big colored
+   letter is the single, earned pop of color. */
+.grade-banner {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 4px 2px 18px;
+  margin-bottom: 4px;
+  gap: 18px;
+}
+.grade-banner .grade-letter {
+  width: auto; height: auto;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  font-size: 54px;
+  line-height: 0.9;
+  color: var(--gb-color, var(--text-primary));
+}
+.grade-banner .grade-headline { font-size: 19px; }
+
+/* ---- Make the three category cards the focal content ---- */
+.report-card-item .rc-title { font-size: 16.5px; }
+.report-card-item .rc-stat { font-size: 16px; margin-top: 3px; }
+.report-card-item .rc-head { padding-top: 20px; padding-bottom: 20px; }
+
+/* ---- "Bottom line" summary: quietly separated from the cards ---- */
+.bottomline-head {
+  margin: 24px 0 8px;
+}
+
+/* ---- Soft blue→green wash, spread across the page (building tab only) ---- */
+/* --warm-y is nudged by scroll (see building.js) so the roaming glow trails you. */
+body.building-body {
+  --glow-blue:  rgba(188, 220, 252, 0.60);
+  --glow-green: rgba(198, 238, 208, 0.60);
+  --warm-y: 42%;
+  background:
+    radial-gradient(1200px 820px at -5% 0%,   var(--glow-blue)  0%, transparent 55%),
+    radial-gradient(1200px 820px at 105% 6%,  var(--glow-green) 0%, transparent 55%),
+    radial-gradient(1150px 980px at 96% var(--warm-y), var(--glow-green) 0%, transparent 58%),
+    radial-gradient(1100px 900px at 0% 94%,   var(--glow-blue)  0%, transparent 58%),
+    var(--page-plane);
+  background-attachment: fixed;
+}
+/* Dark mode: keep it a faint glow, not bright blobs. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) body.building-body {
+    --glow-blue:  rgba(120, 170, 255, 0.11);
+    --glow-green: rgba(110, 220, 150, 0.10);
+  }
+}
+:root[data-theme="dark"] body.building-body {
+  --glow-blue:  rgba(120, 170, 255, 0.11);
+  --glow-green: rgba(110, 220, 150, 0.10);
 }

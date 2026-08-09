@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NYC Rent Check · Should you worry about this apartment?</title>
+  <meta name="description" content="Look up any NYC address to see its official housing record: violations, rodent inspections, and bedbug filings, plus what to ask the landlord." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+</head>
+<body class="building-body">
+  <div class="page building-page">
+    <header class="masthead">
+      <div class="masthead-inner">
+        <p class="eyebrow">NYC Open Data · Housing Records</p>
+        <h1>Should you worry about this apartment?</h1>
+        <p class="subtitle">
+          Enter a NYC building address to check its official record across city
+          datasets: housing violations, rodent inspections, and bedbug filings,
+          plus what's worth asking the landlord before you sign.
+        </p>
+        <nav class="page-nav">
+          <a href="index.html">← Neighborhood dashboard</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="building-main">
+      <form id="addr-form" class="zip-form" autocomplete="off">
+        <label for="addr-input" class="sr-only">NYC building address</label>
+        <div class="addr-field">
+          <input
+            id="addr-input"
+            class="zip-input addr-input"
+            type="text"
+            placeholder="e.g. 30 Rockefeller Plaza"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded="false"
+            aria-controls="addr-suggestions"
+          />
+          <ul id="addr-suggestions" class="addr-suggestions" role="listbox" hidden></ul>
+        </div>
+        <button type="submit" class="btn-primary" id="addr-send">Check building</button>
+      </form>
+
+      <section class="ai-card" id="report-card" hidden>
+        <div class="ai-header">
+          <h2 id="report-title">Building report card</h2>
+          <span class="badge">Live data</span>
+        </div>
+        <div id="report-cards" class="report-cards" hidden></div>
+        <div id="report-answer" class="ai-answer" hidden></div>
+      </section>
+
+      <div id="location-strip" class="location-strip" hidden>
+        <div id="building-map" class="building-map"></div>
+        <div class="loc-meta">
+          <span id="loc-addr" class="loc-addr"></span>
+          <a id="loc-maps-link" class="loc-maps-link" target="_blank" rel="noopener">Open in Google Maps →</a>
+        </div>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Data via NYC Open Data (Socrata):
+        <a href="https://data.cityofnewyork.us/resource/wvxf-dwi5" target="_blank" rel="noopener">HPD Violations</a>,
+        <a href="https://data.cityofnewyork.us/resource/p937-wjvj" target="_blank" rel="noopener">Rodent Inspections</a>,
+        <a href="https://data.cityofnewyork.us/resource/wz6d-d3jb" target="_blank" rel="noopener">Bedbug Filings</a>.
+        Address search via Mapbox. A summary is not legal or housing advice.
+      </p>
+      <button id="theme-toggle" class="footer-toggle" type="button" aria-label="Toggle dark mode">◐ Toggle theme</button>
+    </footer>
+  </div>
+
+  <script src="building.js"></script>
+</body>
+</html>
