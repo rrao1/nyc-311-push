@@ -218,21 +218,22 @@ function currentTheme() {
 function setBasemap() {
   if (!map) return;
   const dark = currentTheme() === "dark";
-  const url = dark
-    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-    : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+  // Esri Canvas basemaps: free, no API key (CARTO started requiring one).
+  // Base + label layers, in a light and a dark gray to match the theme.
+  const shade = dark ? "Dark" : "Light";
+  const esri = (layer) =>
+    `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_${shade}_Gray_${layer}/MapServer/tile/{z}/{y}/{x}`;
+  const opts = { maxZoom: 16 }; // Canvas tiles stop at z16; deeper zoom looks blurry
   if (baseLayer) map.removeLayer(baseLayer);
-  baseLayer = L.tileLayer(url, {
-    attribution: "&copy; OpenStreetMap &copy; CARTO",
-    subdomains: "abcd",
-    maxZoom: 19,
-  }).addTo(map);
-  baseLayer.bringToBack();
+  baseLayer = L.layerGroup([
+    L.tileLayer(esri("Base"), { ...opts, zIndex: 1, attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors" }),
+    L.tileLayer(esri("Reference"), { ...opts, zIndex: 2 }),
+  ]).addTo(map);
 }
 
 function ensureMap() {
   if (map) return;
-  map = L.map("building-map", { zoomControl: true }).setView(NYC_CENTER, 11);
+  map = L.map("building-map", { zoomControl: true, maxZoom: 16 }).setView(NYC_CENTER, 11);
   setBasemap();
 }
 
