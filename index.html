@@ -7,7 +7,7 @@
   <meta name="description" content="Type a NYC ZIP code to see the top 311 complaints in that area over the last year, powered by NYC Open Data." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
@@ -19,6 +19,13 @@
 </head>
 <body>
   <div class="page">
+    <div class="brandbar">
+      <a class="brandmark" href="index.html"><span class="brand-dot" aria-hidden="true">R</span>Rent Check</a>
+      <nav class="brand-nav" aria-label="Pages">
+        <a href="index.html" aria-current="page">Neighborhoods</a>
+        <a href="building.html">Buildings</a>
+      </nav>
+    </div>
     <header class="masthead">
       <div class="masthead-inner">
         <p class="eyebrow">NYC Open Data · 311 Service Requests</p>
@@ -27,9 +34,6 @@
           Enter a New York City ZIP code to see the top 311 complaint types reported
           in that area over the last 12 months.
         </p>
-        <nav class="page-nav">
-          <a href="building.html">Check a specific building →</a>
-        </nav>
       </div>
       <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Toggle dark mode">◐</button>
     </header>
@@ -62,28 +66,34 @@
           <div id="map" class="map"></div>
         </div>
 
-        <div class="chart-card">
-          <div class="chart-header">
-            <h2 id="chart-title">Top complaints</h2>
-            <span id="chart-caption" class="chart-caption"></span>
+        <div class="hood-bottom">
+          <div class="chart-card">
+            <div class="chart-header">
+              <h2 id="chart-title">Top complaints</h2>
+              <span id="chart-caption" class="chart-caption"></span>
+            </div>
+            <div id="chart" class="chart" role="img" aria-label="Top 311 complaint types"></div>
+            <p class="chart-hint">Tap a complaint to show only it on the map.</p>
           </div>
-          <div id="chart" class="chart" role="img" aria-label="Bar chart of top 311 complaint types"></div>
-        </div>
 
-        <div class="ai-card">
-          <div class="ai-header">
-            <h2>Ask about this data</h2>
-            <span class="badge">Claude</span>
+          <div class="ai-card ask-card">
+            <div class="ai-header">
+              <h2>Ask about this neighborhood</h2>
+              <span class="badge">Claude</span>
+            </div>
+            <p class="ai-sub">Answers use only the numbers on this page.</p>
+            <div id="ai-chips" class="ai-chips">
+              <button type="button" data-q="What stands out about this neighborhood?">What stands out?</button>
+              <button type="button" data-q="Is this a lot of noise complaints compared with a typical NYC ZIP?">Is it noisy?</button>
+              <button type="button" data-q="What should a renter know before moving here, based on these complaints?">Renter tips</button>
+              <button type="button" data-q="Which complaints suggest problems with building maintenance?">Building upkeep</button>
+            </div>
+            <form id="ai-form" class="ai-form">
+              <input id="ai-input" class="ai-input" type="text" placeholder="Or ask your own question…" />
+              <button type="submit" class="btn-primary" id="ai-send">Ask</button>
+            </form>
+            <div id="ai-answer" class="ai-answer" hidden></div>
           </div>
-          <p class="ai-sub">
-            Ask a question in plain English — e.g. “What stands out here?” or
-            “Is this a lot of noise complaints?” Answers are grounded in the numbers above.
-          </p>
-          <form id="ai-form" class="ai-form">
-            <input id="ai-input" class="ai-input" type="text" placeholder="Ask a question about these complaints…" />
-            <button type="submit" class="btn-primary" id="ai-send">Ask</button>
-          </form>
-          <div id="ai-answer" class="ai-answer" hidden></div>
         </div>
       </section>
 

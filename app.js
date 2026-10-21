@@ -94,7 +94,7 @@ function renderStats(complaints, total) {
   const topShare = top && total ? Math.round((top.count / total) * 100) : 0;
   const tiles = [
     { value: fmt(total), label: "Total · last 12 mo" },
-    { value: complaints.length ? `${topShare}%` : "—", label: "Top complaint share" },
+    { value: complaints.length ? `${topShare}%` : "—", label: complaints.length ? `are ${complaints[0].type}` : "Top complaint share" },
     { value: fmt(complaints.length), label: "Complaint types" },
   ];
   statRow.innerHTML = tiles
@@ -114,14 +114,27 @@ function renderChart(complaints) {
     return;
   }
   const max = complaints[0].count;
-  chartEl.innerHTML = complaints
-    .map(
-      (c) => `<div class="bar-row filterable" data-type="${c.type}">
-        <div class="bar-label"><span class="name" title="${c.type}">${c.type}</span><span class="count">${fmt(c.count)}</span></div>
-        <div class="bar-track"><div class="bar-fill" data-w="${(c.count / max) * 100}"></div></div>
-      </div>`
-    )
-    .join("");
+  const total = complaints.reduce((s, c) => s + c.count, 0);
+  // The mix: how the top complaints split across categories.
+  const byCat = {};
+  complaints.forEach((c) => { const k = categorize(c.type); byCat[k.key] = byCat[k.key] || { ...k, n: 0 }; byCat[k.key].n += c.count; });
+  const cats = Object.values(byCat).sort((a, b) => b.n - a.n);
+  const mix = `<div class="mix" role="img" aria-label="Complaint mix: ${cats.map((c) => `${c.label} ${Math.round((c.n / total) * 100)}%`).join(", ")}">
+      ${cats.map((c) => `<span class="mix-seg" style="flex:${c.n};background:${c.color}" title="${c.label}: ${Math.round((c.n / total) * 100)}%"></span>`).join("")}
+    </div>
+    <div class="mix-legend">${cats.map((c) => `<span><i style="background:${c.color}"></i>${c.label} <b>${Math.round((c.n / total) * 100)}%</b></span>`).join("")}</div>`;
+  chartEl.innerHTML = mix + `<ol class="rank">` + complaints
+    .map((c, i) => {
+      const cat = categorize(c.type);
+      return `<li class="bar-row filterable" data-type="${c.type}" style="--c:${cat.color}">
+        <span class="rank-n">${i + 1}</span>
+        <div class="rank-body">
+          <div class="bar-label"><span class="name" title="${c.type}">${c.type}</span><span class="count">${fmt(c.count)} <em>${Math.round((c.count / total) * 100)}%</em></span></div>
+          <div class="bar-track"><div class="bar-fill" data-w="${(c.count / max) * 100}"></div></div>
+        </div>
+      </li>`;
+    })
+    .join("") + `</ol>`;
   // Animate widths after paint.
   requestAnimationFrame(() => {
     chartEl.querySelectorAll(".bar-fill").forEach((el) => {
@@ -435,6 +448,12 @@ form.addEventListener("submit", (e) => {
 })();
 
 // --- AI chat (calls our serverless /api/chat, which holds the Claude key) ---
+document.getElementById("ai-chips").addEventListener("click", (e) => {
+  const chip = e.target.closest("button[data-q]");
+  if (!chip) return;
+  aiInput.value = chip.dataset.q;
+  aiForm.requestSubmit();
+});
 aiForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const question = aiInput.value.trim();
@@ -443,7 +462,7 @@ aiForm.addEventListener("submit", async (e) => {
   aiSend.disabled = true;
   aiAnswer.hidden = false;
   aiAnswer.classList.remove("error");
-  aiAnswer.textContent = "Thinking…";
+  aiAnswer.innerHTML = '<span class="skel-line"></span><span class="skel-line w60"></span>';
 
   try {
     const res = await fetch("/api/chat", {

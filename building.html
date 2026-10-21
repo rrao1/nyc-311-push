@@ -7,15 +7,24 @@
   <meta name="description" content="Look up any NYC address to see its official housing record: violations, rodent inspections, and bedbug filings, plus what to ask the landlord." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.js"></script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
 <body class="building-body">
   <div class="page building-page">
+    <div class="brandbar">
+      <a class="brandmark" href="index.html"><span class="brand-dot" aria-hidden="true">R</span>Rent Check</a>
+      <nav class="brand-nav" aria-label="Pages">
+        <a href="index.html">Neighborhoods</a>
+        <a href="building.html" aria-current="page">Buildings</a>
+      </nav>
+    </div>
     <header class="masthead">
       <div class="masthead-inner">
         <p class="eyebrow">NYC Open Data · Housing Records</p>
@@ -25,9 +34,6 @@
           datasets: housing violations, rodent inspections, and bedbug filings,
           plus what's worth asking the landlord before you sign.
         </p>
-        <nav class="page-nav">
-          <a href="index.html">← Neighborhood dashboard</a>
-        </nav>
       </div>
     </header>
 
@@ -47,17 +53,113 @@
           />
           <ul id="addr-suggestions" class="addr-suggestions" role="listbox" hidden></ul>
         </div>
-        <button type="submit" class="btn-primary" id="addr-send">Check building</button>
+        <label for="apt-input" class="sr-only">Apartment (optional)</label>
+        <input id="apt-input" class="zip-input apt-input" type="text" placeholder="Apt (optional)" autocomplete="off" />
+        <button type="submit" class="btn-primary" id="addr-send">Check</button>
       </form>
 
-      <section class="ai-card" id="report-card" hidden>
-        <div class="ai-header">
-          <h2 id="report-title">Building report card</h2>
-          <span class="badge">Live data</span>
+      <div id="viz" class="viz dash" hidden>
+        <p id="viz-status" class="viz-status" role="status" hidden></p>
+
+        <!-- HERO: the block in 3D, with the building's verdict floating on it -->
+        <section class="tile tile-hero" aria-labelledby="hero-title">
+          <div class="hero-map-wrap">
+            <div class="hero-card" id="hero-card">
+              <span class="scope-tag" data-scope="building">Your building</span>
+              <h2 id="hero-title" class="hero-title skel-line"></h2>
+              <div id="hero-verdict" class="hero-verdict"><span class="skel-line w60"></span></div>
+            </div>
+            <div id="viz-map" class="viz-map is-loading" data-skel="Building the 3D block…"></div>
+            <div id="viz-map-legend" class="map-legend" aria-hidden="true">
+              <span><i style="background:#f6c443"></i>Your building</span>
+              <span><i class="sw0"></i>0 open</span>
+              <span><i style="background:#f0b39f"></i>1–9</span>
+              <span><i style="background:#de6b44"></i>10–49</span>
+              <span><i style="background:#b8262a"></i>50+</span>
+            </div>
+          </div>
+          <div id="viz-layers" class="layer-bar" role="group" aria-label="Map layers"></div>
+        </section>
+
+        <div class="dash-grid">
+          <section class="tile" data-scope="apt" id="tile-apt" aria-labelledby="apt-title">
+            <header class="tile-head"><span class="scope-tag" data-scope="apt">Your apartment</span><h3 id="apt-title">Your apartment</h3></header>
+            <form id="viz-unit-form" class="unit-find" autocomplete="off">
+              <label for="viz-unit-input" class="sr-only">Apartment</label>
+              <input id="viz-unit-input" placeholder="Apt, e.g. 4B" />
+              <button type="submit">Look up</button>
+            </form>
+            <div id="viz-unit" class="viz-unit" aria-live="polite"><div class="skel-block"></div></div>
+          </section>
+
+          <section class="tile" data-scope="building" id="tile-glance" aria-labelledby="glance-title">
+            <header class="tile-head tile-head-row"><div><span class="scope-tag" data-scope="building">Your building</span><h3 id="glance-title">At a glance</h3></div>
+              <button type="button" class="info-btn" data-open="define" aria-label="What's a violation?" title="What's a violation?">i</button></header>
+            <div id="viz-facts" class="glance-facts"><div class="skel-line"></div></div>
+            <div id="viz-dials" class="dials"><div class="skel-dial"></div><div class="skel-dial"></div><div class="skel-dial"></div></div>
+            <div id="viz-dial-detail" class="dial-detail" aria-live="polite"></div>
+            <button type="button" class="btn-ghost see-all" data-open="violations">See all violations</button>
+          </section>
+
+          <section class="tile" data-scope="block" id="tile-vs" aria-labelledby="vs-title">
+            <header class="tile-head"><span class="scope-tag" data-scope="block">Your block</span><h3 id="vs-title">Vs. the neighbors</h3></header>
+            <p id="viz-block-stat" class="block-stat"><span class="skel-line"></span></p>
+            <div id="viz-swarm" class="swarm is-loading" data-skel="Comparing nearby buildings…"></div>
+          </section>
+
+          <section class="tile tile-wide" data-scope="building" id="tile-history" aria-labelledby="hist-title">
+            <header class="tile-head tile-head-row">
+              <div><span class="scope-tag" data-scope="building">Your building</span><h3 id="hist-title">History</h3></div>
+              <div id="viz-range" class="seg" role="group" aria-label="Time range">
+                <button type="button" data-range="all" aria-pressed="true">All</button>
+                <button type="button" data-range="10" aria-pressed="false">10 yrs</button>
+                <button type="button" data-range="3" aria-pressed="false">3 yrs</button>
+              </div>
+            </header>
+            <p id="viz-tl-summary" class="tile-sub"></p>
+            <div class="tl-wrap">
+              <div id="viz-timeline" class="timeline is-loading" data-skel="Loading the record…"></div>
+              <div id="viz-tip" class="viz-tip" role="tooltip" hidden></div>
+            </div>
+          </section>
+
+          <section class="tile" data-scope="block" id="tile-noise" aria-labelledby="noise-title">
+            <header class="tile-head"><span class="scope-tag" data-scope="block">Your block</span><h3 id="noise-title">When it's loud</h3></header>
+            <div id="viz-noise" class="noise-clock is-loading" data-skel="Reading noise complaints…"></div>
+            <p id="viz-noise-sub" class="tile-sub"></p>
+          </section>
+
+          <section class="tile tile-full" data-scope="building" id="tile-ask" aria-labelledby="ask-title">
+            <header class="tile-head tile-head-row">
+              <div><span class="scope-tag" data-scope="building">Before you sign</span><h3 id="ask-title">What to ask the landlord</h3></div>
+              <button type="button" id="viz-copy" class="btn-ghost">Copy questions</button>
+            </header>
+            <div class="ask-grid">
+              <section class="ai-card take-col" id="report-card" hidden aria-label="AI summary">
+                <h4 id="report-title" class="sr-only">AI summary</h4>
+                <div id="report-cards" class="report-cards" hidden></div>
+                <div id="report-answer" class="ai-answer" hidden></div>
+              </section>
+              <ol id="viz-questions" class="questions"><li class="skel-line"></li><li class="skel-line"></li></ol>
+            </div>
+          </section>
+          </section>
         </div>
-        <div id="report-cards" class="report-cards" hidden></div>
-        <div id="report-answer" class="ai-answer" hidden></div>
-      </section>
+      </div>
+
+      <dialog id="viz-modal" class="modal" aria-labelledby="modal-title">
+        <div class="modal-head"><h3 id="modal-title"></h3><button type="button" class="modal-x" aria-label="Close">×</button></div>
+        <div id="modal-body" class="modal-body"></div>
+      </dialog>
+      <template id="tpl-define">
+              <p>When a city housing inspector (HPD) finds something in a building that breaks the NYC Housing Maintenance Code, they issue a <strong>violation</strong>: an official order for the landlord to fix it. Each one has a class:</p>
+              <ul>
+                <li><b class="cls c">C</b> <strong>Immediately hazardous:</strong> e.g. no heat or hot water, lead paint, rats or mice, exposed wiring. Most must be fixed within 24 hours.</li>
+                <li><b class="cls b">B</b> <strong>Hazardous:</strong> e.g. leaks, broken locks, missing smoke or carbon monoxide detectors, broken hall lighting. 30 days to fix.</li>
+                <li><b class="cls a">A</b> <strong>Non-hazardous:</strong> minor repairs and paperwork, like a missing annual filing. 90 days to fix.</li>
+              </ul>
+              <p>A few records are class <b class="cls">I</b>: city orders (like a building-wide repair order) rather than individual conditions. <strong>Open</strong> means the city hasn't recorded it as fixed yet. <strong>Closed</strong> means it was corrected or dismissed. A violation can name an apartment, or the whole building (halls, stairs, systems, paperwork).</p>
+            </template>
 
       <div id="location-strip" class="location-strip" hidden>
         <div id="building-map" class="building-map"></div>
@@ -75,13 +177,21 @@
         Data via NYC Open Data (Socrata):
         <a href="https://data.cityofnewyork.us/resource/wvxf-dwi5" target="_blank" rel="noopener">HPD Violations</a>,
         <a href="https://data.cityofnewyork.us/resource/p937-wjvj" target="_blank" rel="noopener">Rodent Inspections</a>,
-        <a href="https://data.cityofnewyork.us/resource/wz6d-d3jb" target="_blank" rel="noopener">Bedbug Filings</a>.
-        Address search via Mapbox. A summary is not legal or housing advice.
+        <a href="https://data.cityofnewyork.us/resource/wz6d-d3jb" target="_blank" rel="noopener">Bedbug Filings</a>,
+        <a href="https://data.cityofnewyork.us/resource/ygpa-z7cr" target="_blank" rel="noopener">HPD Complaints</a>,
+        <a href="https://data.cityofnewyork.us/resource/64uk-42ks" target="_blank" rel="noopener">PLUTO</a>,
+        <a href="https://data.cityofnewyork.us/resource/5zhs-2jue" target="_blank" rel="noopener">Building Footprints</a>,
+        <a href="https://data.cityofnewyork.us/resource/erm2-nwe9" target="_blank" rel="noopener">311 Service Requests</a>,
+        <a href="https://data.cityofnewyork.us/resource/hn5i-inap" target="_blank" rel="noopener">Street Trees</a>,
+        <a href="https://data.cityofnewyork.us/resource/43nn-pn8j" target="_blank" rel="noopener">Restaurant Inspections</a>;
+        NY Open Data: <a href="https://data.ny.gov/resource/i9wp-a4ja" target="_blank" rel="noopener">MTA Subway Entrances</a>.
+        Address matching via NYC Planning Labs GeoSearch (Mapbox as a fallback); 3D map via Mapbox. A summary is not legal or housing advice.
       </p>
       <button id="theme-toggle" class="footer-toggle" type="button" aria-label="Toggle dark mode">◐ Toggle theme</button>
     </footer>
   </div>
 
+  <script src="building-viz.js"></script>
   <script src="building.js"></script>
 </body>
 </html>

@@ -37,7 +37,9 @@ function setStatus(msg, isError = false) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ADDRESS AUTOCOMPLETE — Mapbox, via our /api/geocode proxy (token stays server-side)
 // ═══════════════════════════════════════════════════════════════════════════
-const GEOCODE_URL = "/api/geocode";
+const GEOCODE_URL = "/api/geocode";               // Mapbox via our proxy (fallback)
+const GEOSEARCH_AC = "https://geosearch.planninglabs.nyc/v2/autocomplete"; // NYC's own, keyless, ~60 ms
+const RECENT_KEY = "rentcheck.recent";
 let debounceTimer = null;
 let searchToken = 0;      // guards against out-of-order responses
 let suggestions = [];     // normalized features currently shown
@@ -54,6 +56,7 @@ function featureToState(f) {
     street: p.street || "", // already in NYC format, e.g. "EAST 10 STREET"
     borough: p.borough || "",
     postalcode: p.postalcode || "",
+    bbl: p.bbl || "",
   };
 }
 
@@ -106,27 +109,74 @@ function showLoading() {
   addrInput.setAttribute("aria-expanded", "true");
 }
 
+// "350 WEST 42 STREET" → "350 West 42nd Street"
+function prettyStreet(s) {
+  return String(s || "").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\b(\d+)\b(?=\s+(Street|Avenue|Place|Road|Drive|Terrace|Lane)\b)/g, (m, n) => {
+      const t = n % 100, u = n % 10;
+      return n + (t >= 11 && t <= 13 ? "th" : u === 1 ? "st" : u === 2 ? "nd" : u === 3 ? "rd" : "th");
+    });
+}
+// NYC GeoSearch feature → the same shape the Mapbox proxy returns.
+function fromGeoSearch(f) {
+  const p = f.properties || {};
+  const line1 = prettyStreet(p.name || `${p.housenumber || ""} ${p.street || ""}`);
+  return { geometry: f.geometry, properties: {
+    label: [line1, p.borough, p.postalcode ? `NY ${p.postalcode}` : "NY"].filter(Boolean).join(", "),
+    housenumber: p.housenumber || "", street: p.street || "", borough: p.borough || "", postalcode: p.postalcode || "",
+    bbl: (p.addendum && p.addendum.pad && p.addendum.pad.bbl) || "" } };
+}
+
 async function fetchSuggestions(text) {
   const key = text.toLowerCase();
   const token = ++searchToken;
+  let features = null;
   try {
-    const url = `${GEOCODE_URL}?text=${encodeURIComponent(text)}`;
-    const res = await fetch(url);
+    const res = await fetch(`${GEOSEARCH_AC}?text=${encodeURIComponent(text)}`);
     if (!res.ok) throw new Error(`GeoSearch ${res.status}`);
-    const data = await res.json();
-    if (token !== searchToken) return; // a newer keystroke already fired
-    const features = Array.isArray(data.features) ? data.features.slice(0, 5) : [];
-    suggestCache.set(key, features);
-    renderSuggestions(features);
+    features = ((await res.json()).features || []).slice(0, 6).map(fromGeoSearch);
   } catch {
-    // Network/parse error → just hide the dropdown; never throw.
-    if (token === searchToken) hideSuggestions();
+    try { // fallback: Mapbox through our proxy
+      const res = await fetch(`${GEOCODE_URL}?text=${encodeURIComponent(text)}`);
+      if (res.ok) features = ((await res.json()).features || []).slice(0, 5);
+    } catch { /* both failed */ }
   }
+  if (token !== searchToken) return; // a newer keystroke already fired
+  if (!features) { hideSuggestions(); return; }
+  suggestCache.set(key, features);
+  if (!features.length) {
+    suggestions = []; activeIndex = -1;
+    suggestionsEl.innerHTML = '<li class="loading" aria-disabled="true">No NYC address matches yet. Keep typing the street.</li>';
+    suggestionsEl.hidden = false;
+    return;
+  }
+  renderSuggestions(features);
 }
+
+// Recent searches (this device only) + a hint, shown as soon as the box is focused.
+function readRecent() { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || "[]"); } catch { return []; } }
+function saveRecent(s) {
+  try {
+    const list = [s, ...readRecent().filter((r) => r.label !== s.label)].slice(0, 4);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  } catch { /* storage blocked: skip */ }
+}
+function showStarter() {
+  const recent = readRecent();
+  suggestions = recent;
+  activeIndex = -1;
+  suggestionsEl.innerHTML =
+    (recent.length ? '<li class="ac-head" aria-disabled="true">Recent</li>' + recent.map((s, i) => `<li role="option" id="addr-opt-${i}" data-i="${i}">${escapeHtml(s.label)}</li>`).join("") : "") +
+    '<li class="loading" aria-disabled="true">Type a street address, e.g. 30 Rockefeller Plaza</li>';
+  suggestionsEl.hidden = false;
+  addrInput.setAttribute("aria-expanded", "true");
+}
+addrInput.addEventListener("focus", () => { if (!addrInput.value.trim()) showStarter(); });
 
 // Adopt a chosen feature: fill the input, store state, and move the map.
 function selectFeature(s) {
   selected = s;
+  saveRecent(s);
   currentAddress = s.label || addrInput.value.trim();
   queryAddress = cleanQueryAddress(s);
   addrInput.value = s.label || addrInput.value;
@@ -142,10 +192,8 @@ addrInput.addEventListener("input", () => {
   selected = null;
   const text = addrInput.value.trim();
   clearTimeout(debounceTimer);
-  if (text.length < 3) {
-    hideSuggestions();
-    return;
-  }
+  if (!text) { showStarter(); return; }
+  if (text.length < 2) { hideSuggestions(); return; }
   // Cached query → render instantly. Otherwise show a loading row right away
   // (so it never looks frozen) and fire the request after a short debounce.
   if (suggestCache.has(text.toLowerCase())) {
@@ -153,7 +201,7 @@ addrInput.addEventListener("input", () => {
     return;
   }
   showLoading();
-  debounceTimer = setTimeout(() => fetchSuggestions(text), 150);
+  debounceTimer = setTimeout(() => fetchSuggestions(text), 90);
 });
 
 // Click a suggestion to select it.
@@ -182,6 +230,11 @@ addrInput.addEventListener("keydown", (e) => {
     // off the report itself. preventDefault stops a duplicate form submit.
     e.preventDefault();
     const pick = activeIndex >= 0 ? suggestions[activeIndex] : suggestions[0];
+    // Unhighlighted Enter on a top hit with a DIFFERENT house number: don't take it
+    // silently; submit the typed text so the page can say "Did you mean...".
+    const typed = (addrInput.value.match(/^\s*(\d+(?:-\d+)?[A-Za-z]?)/) || [])[1];
+    const hn = (x) => String(x || "").toUpperCase().replace(/[\s-]+/g, "");
+    if (activeIndex < 0 && pick && typed && pick.housenumber && hn(typed) !== hn(pick.housenumber)) { hideSuggestions(); addrForm.requestSubmit(); return; }
     if (pick) selectFeature(pick);
   } else if (e.key === "Escape") {
     hideSuggestions();
@@ -323,7 +376,7 @@ function assess(f) {
   const netActive = f.net_active != null ? Number(f.net_active) : Math.max(0, infested - (Number(f.eradicated_units) || 0));
   const reInfested = Number(f.re_infested) || 0;
   if (netActive > 0)
-    return { status: "red", stat: `${netActive} currently infested · ${filings} filings`, note: `${netActive} unit${netActive > 1 ? "s" : ""} currently infested` };
+    return { status: "red", stat: `${netActive} infested in latest filing · ${filings} filings`, note: `${netActive} unit${netActive > 1 ? "s" : ""} infested in the latest filing` };
   if (reInfested > 0)
     return { status: "red", stat: `Recurring · ${filings} filings`, note: "Recurring infestations reported" };
   if (infested > 0)
@@ -487,7 +540,7 @@ function gradeFor(assessed) {
   return { grade, worst, headline };
 }
 
-function renderCards(findings) {
+function renderCards(findings, severity) {
   if (!Array.isArray(findings) || !findings.length) {
     cardsEl.hidden = true;
     cardsEl.innerHTML = "";
@@ -502,8 +555,29 @@ function renderCards(findings) {
     return;
   }
 
-  const assessed = present.map((t) => ({ t, f: byType[t], a: assess(byType[t]) }));
-  const { grade, worst, headline } = gradeFor(assessed);
+  // The per-card STATUS (colour) and its note come from the backend severity
+  // rule (api/severity.js) — the single source of truth, with recency windowing.
+  // assess() still supplies the human-readable stat line. Falling back to
+  // assess()'s own status keeps things working if severity is ever absent.
+  const cardStatus = (severity && severity.cards) || {};
+  const assessed = present.map((t) => {
+    const a = assess(byType[t]);
+    const s = cardStatus[t];
+    if (s) { a.status = s.status; if (s.note) a.note = s.note; }
+    return { t, f: byType[t], a };
+  });
+
+  // Banner: a not-found address must NOT show a glowing letter grade (the visual
+  // twin of the false-glow we fixed in the prose). Otherwise, the letter grade
+  // is derived from the (now authoritative) card statuses.
+  let grade, worst, headline;
+  if (severity && severity.band === "NOT_FOUND") {
+    grade = "?";
+    worst = "amber";
+    headline = "No city records found. Verify the address";
+  } else {
+    ({ grade, worst, headline } = gradeFor(assessed));
+  }
 
   const banner = `<div class="grade-banner" data-status="${worst}">
       <div class="grade-letter">${grade}</div>
@@ -561,35 +635,23 @@ cardsEl.addEventListener("click", (e) => {
 // Tiny, safe markdown renderer: headings, bullets, dividers, **bold**.
 // Everything is HTML-escaped first, so model output can never inject markup.
 function renderAnswer(text) {
-  let clean = String(text).trim();
-  // We render our own "Bottom line" label, so strip the model's redundant
-  // leading title line and/or "Bottom line:" prefix if it added one.
+  // Plain prose only: drop any title line, "Bottom line:" prefix, markdown marks.
+  let clean = String(text || "").trim()
+    .replace(/^#+\s.*\n/, "")
+    .replace(/^\**\s*bottom\s*line\s*\**\s*[:\-–—]*\s*\**\s*/i, "");
   const lines = clean.split("\n");
-  if (
-    lines.length &&
-    (/^\*\*.+\*\*$/.test(lines[0].trim()) ||
-      /^\**\s*bottom\s*line\s*\**\s*[:\-–—]*\s*$/i.test(lines[0].trim()))
-  ) {
-    lines.shift();
-    clean = lines.join("\n").trim();
-  }
-  clean = clean.replace(/^\**\s*bottom\s*line\s*\**\s*[:\-–—]+\s*\**\s*/i, "").trim();
-  const html = clean
-    .split("\n")
-    .map((raw) => {
-      let l = raw.trim();
-      if (l === "") return "";
-      if (/^(-{3,}|\*{3,})$/.test(l)) return "<hr>";
-      let tag = "p";
-      if (l.startsWith("### ")) { tag = "h4"; l = l.slice(4); }
-      else if (l.startsWith("## ")) { tag = "h3"; l = l.slice(3); }
-      else if (l.startsWith("# ")) { tag = "h3"; l = l.slice(2); }
-      else if (/^[-•]\s+/.test(l)) { l = "• " + l.replace(/^[-•]\s+/, ""); }
-      const inner = escapeHtml(l).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-      return `<${tag}>${inner}</${tag}>`;
-    })
-    .join("");
-  answerEl.innerHTML = '<div class="rc-section-head bottomline-head">Bottom line</div>' + html;
+  if (lines.length > 1 && /^\*\*.+\*\*$/.test(lines[0].trim())) clean = lines.slice(1).join(" ");
+  clean = clean.replace(/\*\*(.+?)\*\*/g, "$1").replace(/^[-•]\s+/gm, "").replace(/\s*\n+\s*/g, " ").trim();
+  // First sentence becomes the lede.
+  const m = clean.match(/^(.+?[.!?])(\s+|$)(.*)$/);
+  const lede = m ? m[1] : clean, rest = m ? m[3] : "";
+  answerEl.innerHTML =
+    '<div class="take">' +
+      '<div class="take-label">The short version</div>' +
+      `<p class="take-lede">${escapeHtml(lede)}</p>` +
+      (rest ? `<p class="take-body">${escapeHtml(rest)}</p>` : "") +
+      '<p class="take-foot">Written by Claude from the records on this page. Double-check anything important before you sign.</p>' +
+    "</div>";
   answerEl.hidden = false;
 }
 
@@ -621,35 +683,14 @@ function startLoading() {
   answerEl.classList.remove("error");
   answerEl.hidden = false;
   answerEl.innerHTML =
-    '<div class="load-panel">' +
-      '<ul class="load-steps">' +
-        LOADING_STEPS.map(
-          (s) => `<li class="load-step"><span class="ls-mark"></span><span class="ls-label">${escapeHtml(s)}</span></li>`
-        ).join("") +
-      "</ul>" +
-      '<div class="load-writing" hidden>' +
-        '<div class="lw-head"><span class="lw-spark" aria-hidden="true"></span><span class="lw-title">Writing your report</span></div>' +
-        '<div class="lw-caption" aria-live="polite"></div>' +
-        '<div class="lw-bar" role="progressbar" aria-label="Writing your report"><span class="lw-bar-fill"></span></div>' +
-      "</div>" +
+    '<div class="take is-pending">' +
+      '<div class="take-label">The short version</div>' +
+      '<span class="skel-line"></span><span class="skel-line"></span><span class="skel-line w60"></span>' +
+      `<p class="take-foot" aria-live="polite">${escapeHtml(WRITING_CAPTIONS[0])}</p>` +
     "</div>";
-
-  const steps = Array.from(answerEl.querySelectorAll(".load-step"));
-  const writing = answerEl.querySelector(".load-writing");
-  const caption = answerEl.querySelector(".lw-caption");
-
-  if (steps[0]) steps[0].classList.add("active");
-
-  const STEP_MS = 480;
-  steps.forEach((li, i) => {
-    loadTimers.push(setTimeout(() => {
-      li.classList.remove("active");
-      li.classList.add("done");
-      const next = steps[i + 1];
-      if (next) next.classList.add("active");
-      if (i === steps.length - 1) startWriting(writing, caption);
-    }, STEP_MS * (i + 1)));
-  });
+  const caption = answerEl.querySelector(".take-foot");
+  let ci = 0;
+  loadTimers.push(setInterval(() => { ci = (ci + 1) % WRITING_CAPTIONS.length; caption.textContent = WRITING_CAPTIONS[ci]; }, 1500));
 }
 
 // The final phase: reveal the indeterminate bar and cycle micro-captions so the
@@ -690,7 +731,9 @@ async function checkBuilding(ask, full = false) {
   }
 
   card.hidden = false;
-  reportTitle.textContent = `Report card · ${currentAddress}`;
+  reportTitle.textContent = "AI summary";
+  document.getElementById("viz").hidden = false;
+  document.body.classList.add("has-results"); // collapse the intro once there's something to show
   cardsEl.hidden = true;
   cardsEl.innerHTML = "";
   answerEl.hidden = false;
@@ -699,9 +742,45 @@ async function checkBuilding(ask, full = false) {
   setStatus("");
   addrSend.disabled = true;
 
+  // Shareable link for exactly what's on screen.
+  if (full) {
+    try {
+      const u = new URL(window.location.href), apt = (document.getElementById("apt-input").value || "").trim();
+      u.searchParams.set("address", queryAddress);
+      if (apt) u.searchParams.set("apt", apt); else u.searchParams.delete("apt");
+      history.replaceState(null, "", u);
+    } catch { /* ignore */ }
+  }
+
+  // The dashboard resolves the address to ONE building (refusing a different house
+  // number). The AI summary runs only for that building, keyed by its BBL.
+  let viz = null;
+  if (full && window.BuildingViz) {
+    viz = await window.BuildingViz.render(queryAddress);
+    if (viz.stale) return; // a newer check took over
+    if (!viz.ok) {
+      stopLoading();
+      card.hidden = true;
+      answerEl.hidden = true;
+      answerEl.innerHTML = "";
+      addrSend.disabled = false;
+      return;
+    }
+    const label = [prettyStreet(viz.label), viz.borough].filter(Boolean).join(", ");
+    currentAddress = label;
+    if (isFinite(viz.lat) && isFinite(viz.lng)) showOnMap(viz.lat, viz.lng);
+    if (!selected) selected = { label, housenumber: viz.housenumber, street: viz.street, borough: viz.borough, postalcode: viz.postalcode, bbl: viz.bbl };
+    if (viz.postalcode) detailBase.zip = viz.postalcode;
+    if (viz.borough) detailBase.borough = viz.borough;
+    if (viz.housenumber) detailBase.house_number = viz.housenumber;
+    if (viz.street) detailBase.street_name = viz.street;
+  }
+
   let body;
   if (full) {
-    body = { mode: "full", address: queryAddress };
+    body = { mode: "full", address: viz && viz.ok ? currentAddress : queryAddress };
+    if (selected && selected.bbl) body.bbl = selected.bbl;
+    if (viz && viz.ok) body.bbl = viz.bbl; // the building the dashboard shows, always
     if (selected) {
       if (selected.postalcode) body.zip = selected.postalcode;
       if (selected.borough) body.borough = selected.borough;
@@ -721,13 +800,14 @@ async function checkBuilding(ask, full = false) {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
-    renderCards(data.findings);
+    renderCards(data.findings, data.severity);
     renderAnswer(data.answer);
+    answerEl.dataset.band = (data.severity && data.severity.band) || "";
   } catch (err) {
     cardsEl.hidden = true;
     answerEl.classList.add("error");
     answerEl.textContent =
-      `${err.message}\n\n(The report card needs the serverless function running — it works once deployed to Vercel with ANTHROPIC_API_KEY set, or locally via "vercel dev".)`;
+      `${err.message}\n\n(The report card needs the serverless function running. It works once deployed to Vercel with ANTHROPIC_API_KEY set, or locally via "vercel dev".)`;
   } finally {
     stopLoading();
     addrSend.disabled = false;
@@ -745,28 +825,24 @@ addrForm.addEventListener("submit", async (e) => {
   if (selected && selected.label === val) {
     // already have a clean selection with coords + fields
   } else {
+    // Send the user's own text: the dashboard's resolver checks the house number and
+    // refuses (with "Did you mean...") rather than silently showing a different building.
+    selected = null;
     currentAddress = val;
     queryAddress = val;
-    try {
-      const res = await fetch(`${GEOCODE_URL}?text=${encodeURIComponent(val)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const feat = Array.isArray(data.features) && data.features[0];
-        if (feat) {
-          const s = featureToState(feat);
-          selected = s;
-          queryAddress = cleanQueryAddress(s);
-          currentAddress = s.label || val;
-          addrInput.value = currentAddress;
-          if (isFinite(s.lat) && isFinite(s.lng)) showOnMap(s.lat, s.lng);
-        }
-      }
-    } catch {
-      /* geocode is best-effort; fall back to raw text */
-    }
   }
   checkBuilding(FULL_CHECK, true);
 });
+
+// Shareable links: building.html?address=169+East+109+Street,+Manhattan runs the check.
+(function runFromUrl() {
+  const a = new URLSearchParams(window.location.search).get("address");
+  if (!a) return;
+  addrInput.value = a;
+  const apt = new URLSearchParams(window.location.search).get("apt");
+  if (apt) document.getElementById("apt-input").value = apt;
+  addrForm.requestSubmit();
+})();
 
 // Chips: fill the address box, or ask a specific question.
 document.addEventListener("click", (e) => {
@@ -793,26 +869,5 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
       window.matchMedia("(prefers-color-scheme: dark)").matches);
   root.setAttribute("data-theme", isDark ? "light" : "dark");
   setBasemap();
+  if (window.BuildingViz) window.BuildingViz.refreshTheme();
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Warm background glow gently trails your scroll position ("follows you slightly")
-// ─────────────────────────────────────────────────────────────────────────────
-(function warmGlowFollow() {
-  const body = document.body;
-  if (!body.classList.contains("building-body")) return;
-  let target = 42, current = 42, raf = null;
-  function onScroll() {
-    const max = document.documentElement.scrollHeight - window.innerHeight;
-    const frac = max > 4 ? Math.min(1, Math.max(0, window.scrollY / max)) : 0;
-    target = 26 + frac * 48; // warm center travels ~26% → ~74% down the viewport
-    if (raf === null) raf = requestAnimationFrame(tick);
-  }
-  function tick() {
-    current += (target - current) * 0.1; // ease toward target → a soft trailing follow
-    body.style.setProperty("--warm-y", current.toFixed(1) + "%");
-    raf = Math.abs(target - current) > 0.15 ? requestAnimationFrame(tick) : null;
-  }
-  window.addEventListener("scroll", onScroll, { passive: true });
-  onScroll();
-})();
