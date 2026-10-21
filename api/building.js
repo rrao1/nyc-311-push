@@ -3,7 +3,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 // THE IDEA
 // ────────────────────────────────────────────────────────────────────────────
-// You give it a NYC address ("51 E 10th Street, 10003"). To answer "should I
+// You give it a NYC address ("350 W 42nd Street, 10036"). To answer "should I
 // worry about renting here?", the agent has to investigate that ONE building
 // across SEVERAL official NYC datasets — HPD violations, rodent inspections,
 // bedbug filings — deciding which matter, then synthesize a renter's summary.
@@ -19,6 +19,7 @@
 // ────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from "@anthropic-ai/sdk";
+import { assessSeverity } from "./severity.js";
 
 export const MODEL = "claude-haiku-4-5-20251001";
 const MAX_STEPS = 8; // room for several dataset lookups + the final answer
@@ -43,13 +44,23 @@ export function normalizeStreet(s) {
   return x.trim();
 }
 
-// Split a one-line address ("51 East 10 Street, Manhattan, NY 10003") into a
+// Split a one-line address ("350 West 42 Street, Manhattan, NY 10036") into a
 // house number + street. Used by the fast path when the caller sends a string.
 export function parseAddress(address) {
   const line1 = String(address || "").split(",")[0].trim();
-  const m = line1.match(/^\s*(\d+[a-zA-Z]?)\s+(.*)$/);
+  const m = line1.match(/^\s*(\d+(?:-\d+)?[a-zA-Z]?)\s+(.*)$/); // "37-20 81 St" (Queens) too
   if (m) return { house_number: m[1], street_name: m[2] };
   return { house_number: "", street_name: line1 };
+}
+
+// Drop a leading legal citation ("§ 27-2011 ADM CODE ...") from an inspector's description.
+export function stripCite(s) {
+  return String(s || "").replace(/^\s*(?:§|SECTION\b|SEC\b|D?\d)[^:]{0,80}?\b(?:ADM\.?\s*CODE|HMC|RCNY|MDL(?:\s*\d+)?)\b[\s.:,]*/i, "");
+}
+
+function monthsAgo(dateStr) {
+  const d = new Date(dateStr);
+  return Number.isNaN(d.getTime()) ? Infinity : (Date.now() - d.getTime()) / (1000 * 60 * 60 * 24 * 30.44);
 }
 
 export function truncate(s, n = 120) {
@@ -92,22 +103,31 @@ export async function socrata(id, params) {
 // Fires the aggregate count query AND a "recent records" query (and, for
 // violations, a latest-open-date probe) in PARALLEL, so a single dataset lookup
 // is no slower than its slowest sub-query.
-async function runQueryBuilding({ dataset, house_number, street_name, zip, borough }) {
+async function runQueryBuilding({ dataset, house_number, street_name, zip, borough, bbl }) {
   const cfg = DATASETS[dataset];
   if (!cfg) return { error: `Unknown dataset '${dataset}'.` };
 
   const hn = String(house_number || "").replace(/'/g, "").trim();
   const sn = normalizeStreet(street_name);
-  const clauses = [`${cfg.hn}='${hn}'`, `upper(${cfg.st}) like '%${sn}%'`];
-  if (zip && cfg.zip) clauses.push(`${cfg.zip}='${String(zip).replace(/'/g, "").trim()}'`);
-  if (borough && cfg.borough) clauses.push(`upper(${cfg.borough})=upper('${String(borough).replace(/'/g, "")}')`);
-  const where = clauses.join(" AND ");
+  let where;
+  if (/^\d{10}$/.test(String(bbl || ""))) {
+    // The city's building ID: matches records however the street was typed
+    // ("SOUTH    4 STREET", "S 4TH ST") and filed under a neighboring number.
+    where = `bbl='${bbl}'`;
+  } else {
+    const clauses = [`${cfg.hn}='${hn}'`, `upper(${cfg.st}) like '%${sn}%'`];
+    if (zip && cfg.zip) clauses.push(`${cfg.zip}='${String(zip).replace(/'/g, "").trim()}'`);
+    if (borough && cfg.borough) clauses.push(`upper(${cfg.borough})=upper('${String(borough).replace(/'/g, "")}')`);
+    where = clauses.join(" AND ");
+  }
 
   try {
     if (dataset === "violations") {
       const countP = socrata(cfg.id, new URLSearchParams({ "$select": "class, violationstatus, count(*) AS count", "$where": where, "$group": "class, violationstatus", "$limit": "50" }));
       const recentP = socrata(cfg.id, new URLSearchParams({ "$select": "novissueddate, inspectiondate, class, violationstatus, novdescription", "$where": where, "$order": "novissueddate DESC", "$limit": "8" }));
-      const openP = socrata(cfg.id, new URLSearchParams({ "$select": "novissueddate", "$where": `${where} AND upper(violationstatus) like 'OPEN%'`, "$order": "novissueddate DESC", "$limit": "1" }));
+      // Every OPEN violation (oldest first), so the summary gets exact open dates and
+      // the real open class C list. Dated the same way the dashboard dates them.
+      const openP = socrata(cfg.id, new URLSearchParams({ "$select": "inspectiondate, novissueddate, class, apartment, novdescription", "$where": `${where} AND upper(violationstatus) like 'OPEN%'`, "$order": "inspectiondate ASC", "$limit": "5000" }));
       const [rows, recentRows, openRows] = await Promise.all([countP, recentP, openP]);
 
       const open = {}; let openTotal = 0, total = 0;
@@ -116,40 +136,69 @@ async function runQueryBuilding({ dataset, house_number, street_name, zip, borou
         if ((r.violationstatus || "").toLowerCase().startsWith("open")) { open[r.class] = (open[r.class] || 0) + n; openTotal += n; }
       }
       const recent = recentRows.map((r) => ({
-        date: r.novissueddate || r.inspectiondate || null,
+        date: r.inspectiondate || r.novissueddate || null, // same date the dashboard shows
         class: r.class || "",
         status: r.violationstatus || "",
-        desc: truncate(r.novdescription, 120),
+        desc: truncate(stripCite(r.novdescription), 120),
       }));
-      const latest_open_date = (openRows[0] && openRows[0].novissueddate) || null;
-      return { type: "violations", dataset: cfg.label, address: `${hn} ${sn}`, total_violations: total, open_violations_by_class: open, open_hazardous_class_C: open.C || 0, latest_open_date, recent, note: "Class C = immediately hazardous." };
+      const day = (r) => String(r.inspectiondate || r.novissueddate || "").slice(0, 10) || null;
+      const openDates = openRows.map(day).filter(Boolean).sort();
+      const oldest_open_date = openDates[0] || null;
+      const newest_open_date = openDates[openDates.length - 1] || null;
+      const openC = openRows.filter((r) => String(r.class || "").toUpperCase() === "C");
+      const open_class_C_records = openC.slice().reverse().slice(0, 15)
+        .map((r) => ({ date: day(r), apartment: r.apartment || "common area / building", desc: truncate(stripCite(r.novdescription), 90) }));
+      return { type: "violations", dataset: cfg.label, address: `${hn} ${sn}`, total_violations: total, open_violations_total: openTotal, open_violations_by_class: open, open_hazardous_class_C: open.C || 0,
+        oldest_open_date, newest_open_date, latest_open_date: newest_open_date, // any class
+        oldest_open_class_C_date: openC.length ? day(openC[0]) : null, newest_open_class_C_date: openC.length ? day(openC[openC.length - 1]) : null,
+        open_class_C_records, open_class_C_records_note: openC.length > 15 ? `newest 15 of ${openC.length} open class C` : `all ${openC.length} open class C`,
+        recent, recent_note: "the 8 most recently issued violations, ANY status (open or closed)", note: "Class C = immediately hazardous." };
     }
 
     if (dataset === "rodent") {
-      const countP = socrata(cfg.id, new URLSearchParams({ "$select": "result, count(*) AS count", "$where": where, "$group": "result", "$limit": "50" }));
-      const recentP = socrata(cfg.id, new URLSearchParams({ "$select": "inspection_date, result", "$where": where, "$order": "inspection_date DESC", "$limit": "8" }));
-      const [rows, recentRows] = await Promise.all([countP, recentP]);
-
-      const byResult = {}; let ratFails = 0;
-      for (const r of rows) { const n = Number(r.count) || 0; byResult[r.result] = n; if (/rat activity/i.test(r.result || "")) ratFails += n; }
-      const recent = recentRows.map((r) => ({ date: r.inspection_date || null, result: r.result || "" }));
-      return { type: "rodent", dataset: cfg.label, address: `${hn} ${sn}`, results: byResult, failed_for_rat_activity: ratFails, recent };
+      // All inspections, newest first: windowed counts are computed here exactly
+      // (the dashboard's dial uses the same 5-year window).
+      const rowsAll = await socrata(cfg.id, new URLSearchParams({ "$select": "inspection_date, result", "$where": where, "$order": "inspection_date DESC", "$limit": "2000" }));
+      const byResult = {}; let ratFails = 0, ratFails5 = 0, insp5 = 0, latestFail = null;
+      const isRat = (x) => /rat activity/i.test(x || "");
+      for (const r of rowsAll) {
+        byResult[r.result] = (byResult[r.result] || 0) + 1;
+        const within5 = monthsAgo(r.inspection_date) <= 60;
+        if (within5) insp5++;
+        if (isRat(r.result)) { ratFails++; if (within5) ratFails5++; if (!latestFail) latestFail = r.inspection_date || null; }
+      }
+      const recent = rowsAll.slice(0, 8).map((r) => ({ date: r.inspection_date || null, result: r.result || "" }));
+      const latest = rowsAll[0] ? { date: String(rowsAll[0].inspection_date || "").slice(0, 10) || null, result: rowsAll[0].result || "" } : null;
+      return { type: "rodent", dataset: cfg.label, address: `${hn} ${sn}`, results: byResult, failed_for_rat_activity: ratFails,
+        rat_failures_last_5_years: ratFails5, rat_failures_all_time: ratFails, inspections_last_5_years: insp5,
+        latest_inspection: latest, latest_rat_failure_date: latestFail ? String(latestFail).slice(0, 10) : null,
+        latest_rat_failure_months_ago: latestFail ? Math.floor(monthsAgo(latestFail)) : null, recent };
     }
 
-    // bedbug — annual filings are largely MANDATORY reports, not warnings. A
-    // building can file "9 infested" across the years yet have every one of
-    // those eradicated and none recur — that is NOT an active problem. So we
-    // aggregate eradications + recurrences too and derive a NET-ACTIVE count.
-    const countP = socrata(cfg.id, new URLSearchParams({ "$select": "count(*) AS filings, sum(infested_dwelling_unit_count) AS infested_units, sum(eradicated_unit_count) AS eradicated_units, sum(re_infested_dwelling_unit) AS re_infested", "$where": where, "$limit": "1" }));
-    const recentP = socrata(cfg.id, new URLSearchParams({ "$select": "filing_date, infested_dwelling_unit_count, eradicated_unit_count", "$where": where, "$order": "filing_date DESC", "$limit": "8" }));
-    const [rows, recentRows] = await Promise.all([countP, recentP]);
-    const r = rows[0] || {};
-    const infested_units = Number(r.infested_units) || 0;
-    const eradicated_units = Number(r.eradicated_units) || 0;
-    const re_infested = Number(r.re_infested) || 0;
-    const net_active = Math.max(0, infested_units - eradicated_units);
-    const recent = recentRows.map((x) => ({ date: x.filing_date || null, infested: Number(x.infested_dwelling_unit_count) || 0, eradicated: Number(x.eradicated_unit_count) || 0 }));
-    return { type: "bedbug", dataset: cfg.label, address: `${hn} ${sn}`, filings: Number(r.filings) || 0, infested_units, eradicated_units, re_infested, net_active, recent };
+    // bedbug — annual filings are largely MANDATORY reports, not warnings. Each
+    // filing reports the past year, so summing filings double-counts: what's
+    // infested NOW is the LATEST filing's count. Duplicate rows for the same
+    // filing date are collapsed first.
+    const rowsAll = await socrata(cfg.id, new URLSearchParams({ "$select": "filing_date, infested_dwelling_unit_count, eradicated_unit_count, re_infested_dwelling_unit", "$where": where, "$order": "filing_date DESC", "$limit": "500" }));
+    const byDate = new Map();
+    for (const x of rowsAll) {
+      const k = String(x.filing_date || "").slice(0, 10); if (!k) continue;
+      const o = byDate.get(k) || { date: k, infested: 0, eradicated: 0, re_infested: 0 };
+      o.infested = Math.max(o.infested, Number(x.infested_dwelling_unit_count) || 0);
+      o.eradicated = Math.max(o.eradicated, Number(x.eradicated_unit_count) || 0);
+      o.re_infested = Math.max(o.re_infested, Number(x.re_infested_dwelling_unit) || 0);
+      byDate.set(k, o);
+    }
+    const filingsList = [...byDate.values()]; // newest first
+    const latest = filingsList[0] || null;
+    const infested_units = filingsList.reduce((a, f) => a + f.infested, 0);
+    const eradicated_units = filingsList.reduce((a, f) => a + f.eradicated, 0);
+    const net_active = latest ? latest.infested : 0;
+    const re_infested = latest ? latest.re_infested : 0;
+    const recent = filingsList.slice(0, 8).map((x) => ({ date: x.date, infested: x.infested, eradicated: x.eradicated }));
+    return { type: "bedbug", dataset: cfg.label, address: `${hn} ${sn}`, filings: filingsList.length, latest_filing: latest,
+      infested_units, eradicated_units, infested_units_note: "summed across all filings ever (history, not current)", re_infested, net_active,
+      net_active_note: "infested units in the LATEST filing only", recent };
   } catch (err) {
     return { dataset: cfg.label, error: err.message || "NYC Open Data query failed" };
   }
@@ -165,16 +214,43 @@ const SYSTEM =
   "statement on tool results; never invent numbers; no outside knowledge.";
 
 // System prompt for the FAST PATH: the data is already gathered, just write.
+// The verdict's TONE is anchored to a deterministic SEVERITY band (see
+// api/severity.js) so the model can't over- or under-state the headline — the
+// calibration failure our evals caught (e.g. calling a not-found address
+// "excellent"). The band is computed in code; the model only writes the prose.
 const SYSTEM_WRITE =
   "You are a renter's advocate for NYC. Official records for ONE building have ALREADY been " +
   "gathered (JSON below): housing violations, rodent inspections, bedbug filings. The user ALREADY " +
   "SEES the per-dataset counts as cards, so DO NOT repeat every number.\n\n" +
-  "Write ONLY a short bottom-line summary: 2-3 sentences, plain prose, no headings, no bullets. " +
-  "Give the overall verdict and the single most useful thing to ask the landlord. Base it strictly " +
-  "on the data; no outside knowledge; a clean dataset is good news.";
+  "You are also given a SEVERITY band computed deterministically from those records. Your verdict's " +
+  "tone MUST match it — do not overstate or understate:\n" +
+  "  • RED — lead with clear, specific concern about the current/serious issue.\n" +
+  "  • AMBER — a mixed or resolved-history picture: neither alarming nor spotless.\n" +
+  "  • GREEN — reassuring; a clean record is genuinely good news.\n" +
+  "  • NOT_FOUND — NO city records matched this address. Do NOT rate the building good or bad, and " +
+  "do NOT call it clean, excellent, or in good shape. State plainly that no records were found, " +
+  "which may mean a well-kept building OR an address that didn't match city records, and suggest " +
+  "double-checking the address.\n\n" +
+  "TIME: today's date is given with the records. Use any *_months_ago field as given; otherwise compute \"how long ago\" from today's date exactly; " +
+  "never say \"past year\" or \"recently\" about something more than 12 months before today. Prefer naming the month and year.\n" +
+  "NO GUESSING: state only what the records show. Don't infer landlord behavior or speed (no \"slow to report\", \"quickly\", \"monitoring\"); " +
+  "annual bedbug filings are mandatory reports, not a sign of a problem.\n\n" +
+  "FACTS: use ONLY the counts and dates given; never compute your own totals. Dates mean exactly what their " +
+  "field names say: oldest_open_date / newest_open_date are the OLDEST / NEWEST still-open violation of ANY class; " +
+  "for class C (immediately hazardous) dates use oldest_open_class_C_date / newest_open_class_C_date and cite only open_class_C_records. For rats, latest_inspection is the most " +
+  "recent inspection of ANY result and latest_rat_failure_date the most recent FAILURE; don't call a failure the latest " +
+  "inspection unless the dates match. Give rat-failure counts from rat_failures_last_5_years (\"in the last 5 years\") or " +
+  "rat_failures_all_time (\"ever\"). For bedbugs, what's infested now is net_active (the latest filing only); never " +
+  "add up filings. Whenever you give a count, name its time window (\"open now\", \"in the last 5 years\", \"ever\", " +
+  "\"in the latest filing\"). Use correct singular/plural.\n" +
+  "NEVER mention the severity band, its name (RED, AMBER, GREEN, NOT_FOUND), a color rating, a grade, or any field " +
+  "or internal label; just write the plain-language verdict. Never use em-dashes.\n\n" +
+  "Write ONLY a short bottom-line summary: 2-3 sentences, plain prose, no headings, no bold, no bullets. " +
+  "Give the verdict and the one or two facts that matter most. Don't list questions for the landlord (the page shows them separately). Base it strictly on the " +
+  "data; never invent numbers; no outside knowledge.";
 
 // ── FAST PATH — no agent loop. Query all three in parallel, then one write. ──
-async function fullCheck(anthropic, { address, zip, borough, house_number, street_name }) {
+async function fullCheck(anthropic, { address, zip, borough, house_number, street_name, bbl }) {
   // Prefer explicit structured fields; fall back to parsing the address string.
   let hn = house_number, sn = street_name;
   if (!hn || !sn) {
@@ -183,29 +259,49 @@ async function fullCheck(anthropic, { address, zip, borough, house_number, stree
     sn = sn || parsed.street_name;
   }
 
-  const results = await Promise.all(
-    FINDING_ORDER.map((dataset) => runQueryBuilding({ dataset, house_number: hn, street_name: sn, zip, borough }))
-  );
+  // PLUTO facts (same lookup the dashboard makes) so the summary can flag a
+  // non-residential building or NYCHA the same way the hero does.
+  const plutoP = /^\d{10}$/.test(String(bbl || ""))
+    ? socrata("64uk-42ks", new URLSearchParams({ "$select": "unitsres, ownername", "$where": `bbl='${bbl}'`, "$limit": "1" })).then((r) => r[0] || null).catch(() => null)
+    : Promise.resolve(null);
+  const [results, pluto] = await Promise.all([
+    Promise.all(FINDING_ORDER.map((dataset) => runQueryBuilding({ dataset, house_number: hn, street_name: sn, zip, borough, bbl }))),
+    plutoP,
+  ]);
+  const notes = [];
+  if (pluto && (Number(pluto.unitsres) === 0 || /EDUCATION|SCHOOL CONSTRUCTION/i.test(pluto.ownername || "")))
+    notes.push("City land records list 0 residential units here (or a school owner): this does not look like a residential building, so say plainly that housing records may not apply, and do not call it clean or a good place to rent.");
+  if (pluto && /HOUSING AUTH/i.test(pluto.ownername || ""))
+    notes.push("This is NYCHA public housing: note that HPD records cover NYCHA poorly and these records are for the whole development.");
 
   // Findings for the UI: clean, error-free, in canonical order.
   const findings = results.filter((r) => r && r.type && !r.error);
 
+  // Deterministic headline band — anchors the verdict's tone (calibration).
+  const severity = assessSeverity(findings);
+
   const reply = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 220,
+    temperature: 0, // same building → same summary
     system: SYSTEM_WRITE,
     messages: [
       {
         role: "user",
         content:
+          `Today's date: ${new Date().toISOString().slice(0, 10)}\n` +
           `Building: ${address || `${hn} ${sn}`}\n\n` +
+          `SEVERITY BAND (internal, never mention it; your verdict's tone MUST match it):\n` +
+          `${severity.band}: ${severity.reasons.join("; ")}\n\n` +
+          (notes.length ? `BUILDING NOTES:\n${notes.join("\n")}\n\n` : "") +
           `Records (JSON):\n${JSON.stringify(results, null, 2)}\n\n` +
           "Write the renter's report card.",
       },
     ],
   });
-  const answer = reply.content.filter((b) => b.type === "text").map((b) => b.text).join("");
-  return { answer, findings };
+  const answer = reply.content.filter((b) => b.type === "text").map((b) => b.text).join("")
+    .replace(/\s*—\s*/g, ", "); // house style: no em-dashes in user-facing copy
+  return { answer, findings, severity };
 }
 
 // ── AGENT LOOP — model decides which datasets to hit (focused questions) ────
@@ -224,7 +320,8 @@ async function agentLoop(anthropic, { question, zip }) {
     if (reply.stop_reason !== "tool_use") {
       const answer = reply.content.filter((b) => b.type === "text").map((b) => b.text).join("");
       if (process.env.DEBUG_AGENT) console.error(`[step ${steps}] Claude gave its FINAL ANSWER — loop ends.`);
-      return { answer, findings: collectFindings() };
+      const findings = collectFindings();
+      return { answer, findings, severity: assessSeverity(findings) };
     }
 
     messages.push({ role: "assistant", content: reply.content });
@@ -245,7 +342,8 @@ async function agentLoop(anthropic, { question, zip }) {
     messages.push({ role: "user", content: toolResults });
   }
 
-  return { answer: "I couldn't finish the lookup — try giving a full street address with ZIP.", findings: collectFindings() };
+  const findings = collectFindings();
+  return { answer: "I couldn't finish the lookup. Try giving a full street address with ZIP.", findings, severity: assessSeverity(findings) };
 }
 
 export default async function handler(req, res) {
